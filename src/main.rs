@@ -1,29 +1,10 @@
 use rudoku::rudoku::{
-    ChildObserved, ChildObservedExt, Observed, Observer, StateValue, Value, ValueExt,
+    ChildObserved, Observed, Observer, Value, ValueExt,
 };
 use rudoku::text::Decorated;
+use rudoku::notify::{Read, WatchFile};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::thread::sleep;
-use std::time::{Duration, SystemTime};
-
-struct ClockValue {
-    value: StateValue<SystemTime>,
-}
-impl ClockValue {
-    fn new() -> (ClockValue, Box<dyn Observed<SystemTime>>) {
-        let (value, observed) = StateValue::new(SystemTime::now());
-
-        (ClockValue { value }, observed)
-    }
-
-    fn run(&mut self) {
-        loop {
-            sleep(Duration::new(1, 0));
-            self.value.set(SystemTime::now());
-        }
-    }
-}
 
 struct Printer<T> {
     value: RefCell<Option<Box<dyn Value<T>>>>,
@@ -39,6 +20,8 @@ where
         let observer: Rc<dyn Observer> = r.clone();
         let value = observed.value(&observer);
         *r.value.borrow_mut() = Some(value);
+
+        r.update();
         r
     }
 }
@@ -48,54 +31,46 @@ impl<T: std::fmt::Display> Observer for Printer<T> {
     }
 }
 
-struct PrettyClock {}
-impl PrettyClock {
-    fn new() -> PrettyClock {
-        PrettyClock {}
-    }
-}
-impl ChildObserved<String, SystemTime> for PrettyClock {
-    fn value(
-        &mut self,
-        _: &Rc<dyn Observer>,
-        input: Box<dyn Value<SystemTime>>,
-    ) -> Box<dyn Value<String>> {
-        input.map(|x| match x.duration_since(SystemTime::UNIX_EPOCH) {
-            Ok(n) => format!("1970-01-01 00:00:00 UTC was {} seconds ago!", n.as_secs()),
-            Err(_) => panic!("SystemTime before UNIX EPOCH!"),
-        })
-    }
-}
-
 struct Main {
-    text: PrettyClock,
+    watch: Box<dyn Observed<()>>,
+    text: Read,
     decorated: Decorated,
 }
 impl Main {
-    fn new() -> Main {
-        Main {
-            text: PrettyClock::new(),
-            decorated: Decorated::new(),
-        }
+    fn new(path: String) -> (Main, WatchFile) {
+        let (watcher, watch) = WatchFile::new(&path);
+        let text = Read::new(path);
+
+        (
+            Main {
+                watch,
+                text,
+                decorated: Decorated::new(),
+            },
+            watcher
+        )
     }
 }
-impl ChildObserved<String, SystemTime> for Main {
+impl Observed<String> for Main {
     fn value(
         &mut self,
-        observer: &Rc<dyn Observer>,
-        input: Box<dyn Value<SystemTime>>,
+        observer: &Rc<dyn Observer>
     ) -> Box<dyn Value<String>> {
-        self.decorated.value(
-            observer,
-            self.text.value(observer, input).map(|x| (3, 3, x)),
+        self.decorated.value(observer,
+            self.text.value(observer, self.watch.value(observer)).map(|content| {
+                let contents = content
+                .split("\n")
+                .map(|x| String::from(x))
+                .collect();
+
+                (1, 1, contents)
+            }),
         )
     }
 }
 
 fn main() {
-    let (mut runner, clock) = ClockValue::new();
-
-    let main: Box<dyn ChildObserved<String, SystemTime>> = Box::new(Main::new());
-    let _output = Printer::new(main.fuse(clock));
-    runner.run();
+    let (main, mut watch) = Main::new(String::from("README.md"));
+    let _output = Printer::new(Box::new(main) as Box<dyn Observed<String>>);
+    watch.run();
 }

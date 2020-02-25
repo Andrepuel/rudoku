@@ -168,49 +168,60 @@ impl ChildObserved<String, (i32, i32, i32, i32)> for Border {
 pub struct Decorated {
     clear: Clear,
     border: Border,
-    positioned: PositionedText,
 }
 impl Decorated {
     pub fn new() -> Decorated {
         Decorated {
             clear: Clear::new(),
             border: Border::new(),
-            positioned: PositionedText::new(),
         }
     }
 }
-impl ChildObserved<String, (i32, i32, String)> for Decorated {
+impl ChildObserved<String, (i32, i32, Vec<String>)> for Decorated {
     fn value(
         &mut self,
         observer: &Rc<dyn Observer>,
-        input_unique: Box<dyn Value<(i32, i32, String)>>,
+        input_unique: Box<dyn Value<(i32, i32, Vec<String>)>>,
     ) -> Box<dyn Value<String>> {
-        let input = input_unique.split();
+        let input = input_unique
+            .map(|(row, col, text)| {
+                (
+                    row,
+                    col,
+                    text.iter().map(|x| x.len()).max().unwrap() as i32 + 4,
+                    text.len() as i32 + 4,
+                    text,
+                )
+            })
+            .split();
 
         self.clear
             .value(
                 observer,
                 input
                     .take()
-                    .map(|(row, col, text)| (row, col, (text.len() + 3) as i32, 5)),
+                    .map(|(row, col, width, height, _text)| (row, col, width, height)),
             )
             .join(
                 self.border.value(
                     observer,
                     input
                         .take()
-                        .map(|(row, col, text)| (row, col, (text.len() + 3) as i32, 5)),
+                        .map(|(row, col, width, height, _text)| (row, col, width, height)),
                 ),
             )
             .map(|x| format!("{}{}", x.0, x.1))
-            .join(
-                self.positioned.value(
-                    observer,
-                    input
-                        .take()
-                        .map(|(row, col, text)| (row + 2, col + 2, text)),
-                ),
-            )
+            .join(input.take().map(|(row, col, _width, _height, text)| {
+                let mut r = String::new();
+                for i in 0..(text.len() as i32) {
+                    r.push_str(&format!(
+                        "{}{}",
+                        PositionedText::position(row + 2 + i, col + 2),
+                        text[i as usize]
+                    ));
+                }
+                r
+            }))
             .map(|x| format!("{}{}", x.0, x.1))
     }
 }
