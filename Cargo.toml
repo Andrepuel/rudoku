@@ -1,5 +1,5 @@
 [package]
-name = "rust_29405"
+name = "rudoku"
 version = "0.1.0"
 authors = ["André Puel"]
 edition = "2018"
