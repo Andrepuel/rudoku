@@ -4,62 +4,77 @@ use std::cell::RefCell;
 trait Observer {
     fn update(&self);
 }
-
+struct EmptyObserver {
+}
+impl Observer for EmptyObserver {
+    fn update(&self) {}
+}
 trait Observed<T> {
-    fn observe(&self, observe: Rc<dyn Observer>) -> Rc<dyn Value<T>>;
+    fn value(&mut self) -> Rc<dyn Value<T>>;
 }
 
 trait Value<T> {
+    fn set_observer(&self, observer: Weak<dyn Observer>);
     fn get(&self) -> T;
-}
-
-struct StateValue<T> {
-    observers: RefCell<Vec<Weak<dyn Observer>>>,
-    value: Rc<StateValueValue<T>>,
-}
-impl<T> StateValue<T> {
-    fn new(initial: T) -> StateValue<T> {
-        StateValue {
-            observers: RefCell::new(Vec::new()),
-            value: Rc::new(StateValueValue::<T>{value: RefCell::new(initial)}),
-        }
-    }
-
-    fn lock_observers(&self) -> Vec<Rc<dyn Observer>> {
-        let mut i = 0;
-        let mut r = Vec::new();
-        let mut observers = self.observers.borrow_mut();
-        while i < observers.len() {
-            if let Some(lock) = observers[i].upgrade() {
-                r.push(lock);
-                i += 1;
-            } else {
-                observers.remove(i);
-            }
-        }
-
-        r
-    }
-
-    fn set(&self, value: T) {
-        *self.value.value.borrow_mut() = value;
-        self.lock_observers()
-        .into_iter()
-        .for_each(|x| x.update());
-    }
 }
 struct StateValueValue<T> {
     value: RefCell<T>,
+    observer: RefCell<Weak<dyn Observer>>,
 }
 impl<T: Copy> Value<T> for StateValueValue<T> {
+    fn set_observer(&self, observer: Weak<dyn Observer>) {
+        *self.observer.borrow_mut() = observer;
+    }
+
     fn get(&self) -> T {
         *self.value.borrow()
     }
 }
-impl<T: Clone + Copy> Observed<T> for StateValue<T> where T : 'static {
-    fn observe(&self, observe: Rc<dyn Observer>) -> Rc<dyn Value<T>> {
-        self.observers.borrow_mut().push(Rc::downgrade(&observe));
-        self.value.clone()
+struct StateValue<T> {
+    observers: Vec<Rc<StateValueValue<T>>>,
+    value: T,
+}
+impl<T: Copy> StateValue<T> {
+    fn new(initial: T) -> StateValue<T> {
+        StateValue {
+            observers: Vec::new(),
+            value: initial,
+        }
+    }
+
+    fn lock_observers(&mut self) -> Vec<(Rc<dyn Observer>, Rc<StateValueValue<T>>)> {
+        let mut i = 0;
+        let mut r = Vec::new();
+        while i < self.observers.len() {
+            if let Some(lock) = self.observers[i].clone().observer.borrow().upgrade() {
+                r.push((lock, self.observers[i].clone()));
+                i += 1;
+            } else {
+                self.observers.remove(i);
+            };
+        };
+
+        r
+    }
+
+    fn set(&mut self, value: T) {
+        self.value = value;
+        self.lock_observers()
+        .into_iter()
+        .for_each(|x| {
+            *x.1.value.borrow_mut() = value;
+            x.0.update();
+        });
+    }
+}
+impl<T: Copy> Observed<T> for StateValue<T> where T: 'static {
+    fn value(&mut self) -> Rc<dyn Value<T>> {
+        let r = Rc::new(StateValueValue {
+            value: RefCell::new(self.value),
+            observer: RefCell::new(Weak::<EmptyObserver>::new()),
+        });
+        self.observers.push(r.clone());
+        r
     }
 }
 
@@ -76,7 +91,7 @@ impl ClockValue {
         }
     }
 
-    fn run(&self) {
+    fn run(&mut self) {
         loop {
             sleep(Duration::new(1, 0));
             self.value.set(SystemTime::now());
@@ -84,30 +99,33 @@ impl ClockValue {
     }
 }
 impl Observed<SystemTime> for ClockValue {
-    fn observe(&self, observe: Rc<dyn Observer>) -> Rc<dyn Value<SystemTime>> {
-        self.value.observe(observe)
+    fn value(&mut self) -> Rc<dyn Value<SystemTime>> {
+        self.value.value()
     }
 }
 
-struct X {
-    clock: RefCell<Option<Rc<dyn Value<SystemTime>>>>,
+struct Printer<T> {
+    value: Rc<dyn Value<T>>,
 }
-impl X {
-    fn new(clock: &ClockValue) -> Rc<X> {
-        let r = X{clock: RefCell::new(None)};
-        let r = Rc::new(r);
-        *r.clock.borrow_mut() = Some(clock.observe(r.clone()));
+impl<T: std::fmt::Debug> Printer<T> where T: 'static {
+    fn new(observed: &mut dyn Observed<T>) -> Rc<Printer<T>> {
+        let value = observed.value();
+        let r = Rc::new(Printer::<T> {
+            value: value.clone(),
+        });
+        let observer: Rc<dyn Observer> = r.clone();
+        value.set_observer(Rc::downgrade(&observer));
         r
     }
 }
-impl Observer for X {
+impl<T: std::fmt::Debug> Observer for Printer<T> {
     fn update(&self) {
-        println!("Clock {:?}", self.clock.borrow().as_ref().unwrap().get());
+        println!("Got {:?}", self.value.get());
     }
 }
 
 fn main() {
-    let clock = ClockValue::new();
-    let x = X::new(&clock);
+    let mut clock = ClockValue::new();
+    let x = Printer::new(&mut clock);
     clock.run();
 }
