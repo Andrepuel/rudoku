@@ -17,7 +17,30 @@ trait Value<T> {
     fn set_observer(&mut self, observer: Weak<dyn Observer>);
     fn get(&self) -> T;
 }
+struct ValueMap<T, U, F: Fn(T) -> U> {
+    underlying: Box<dyn Value<T>>,
+    adapter: F,
+}
+impl<T: Copy, U, F: Fn(T) -> U> Value<U> for ValueMap<T, U, F> where T: 'static, U: 'static {
+    fn set_observer(&mut self, observer: Weak<dyn Observer>) {
+        self.underlying.set_observer(observer)
+    }
 
+    fn get(&self) -> U {
+        (self.adapter)(self.underlying.get())
+    }
+}
+trait ValueExt<T> {
+    fn map<U, F: Fn(T) -> U>(self: Box<Self>, adapter: F) -> Box<dyn Value<U>> where U: 'static, F: 'static;
+}
+impl<T: Copy> ValueExt<T> for dyn Value<T> where T: 'static {
+    fn map<U, F: Fn(T) -> U>(self: Box<Self>, adapter: F) -> Box<dyn Value<U>> where U: 'static, F: 'static {
+        Box::new(ValueMap::<T, U, F> {
+            underlying: self,
+            adapter
+        })
+    }
+}
 
 struct StateValueValue<T> {
     observers: Weak<RefCell<Vec<Weak<dyn Observer>>>>,
@@ -138,22 +161,11 @@ struct PrettyClock {
 }
 impl Observed<String> for PrettyClock {
     fn value(&mut self) -> Box<dyn Value<String>> {
-        struct SelfValue {
-            under: Box<dyn Value<SystemTime>>,
-        }
-        impl Value<String> for SelfValue {
-            fn set_observer(&mut self, observer: Weak<dyn Observer>) {
-                self.under.set_observer(observer)
-            }
-
-            fn get(&self) -> String {
-                match self.under.get().duration_since(SystemTime::UNIX_EPOCH) {
-                    Ok(n) => format!("1970-01-01 00:00:00 UTC was {} seconds ago!", n.as_secs()),
-                    Err(_) => panic!("SystemTime before UNIX EPOCH!"),
-                }
-            }
-        }
-        Box::new(SelfValue{under: self.clock.value()})
+        self.clock.value()
+        .map(|x| match x.duration_since(SystemTime::UNIX_EPOCH) {
+            Ok(n) => format!("1970-01-01 00:00:00 UTC was {} seconds ago!", n.as_secs()),
+            Err(_) => panic!("SystemTime before UNIX EPOCH!"),
+        })
     }
 }
 
@@ -162,6 +174,6 @@ fn main() {
     let mut pretty = PrettyClock {
         clock,
     };
-    let x = Printer::new(&mut pretty);
+    let _x = Printer::new(&mut pretty);
     runner.run();
 }
