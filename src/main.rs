@@ -10,11 +10,10 @@ impl Observer for EmptyObserver {
     fn update(&self) {}
 }
 trait Observed<T> {
-    fn value(&mut self) -> Box<dyn Value<T>>;
+    fn value(&mut self, observer: Weak<dyn Observer>) -> Box<dyn Value<T>>;
 }
 
 trait Value<T> {
-    fn set_observer(&mut self, observer: Weak<dyn Observer>);
     fn get(&self) -> T;
 }
 struct ValueMap<T, U, F: Fn(T) -> U> {
@@ -22,10 +21,6 @@ struct ValueMap<T, U, F: Fn(T) -> U> {
     adapter: F,
 }
 impl<T: Copy, U, F: Fn(T) -> U> Value<U> for ValueMap<T, U, F> where T: 'static, U: 'static {
-    fn set_observer(&mut self, observer: Weak<dyn Observer>) {
-        self.underlying.set_observer(observer)
-    }
-
     fn get(&self) -> U {
         (self.adapter)(self.underlying.get())
     }
@@ -43,17 +38,26 @@ impl<T: Copy> ValueExt<T> for dyn Value<T> where T: 'static {
 }
 
 struct StateValueValue<T> {
-    observers: Weak<RefCell<Vec<Weak<dyn Observer>>>>,
     value: Rc<RefCell<T>>,
 }
 
-impl<T: Copy> Value<T> for StateValueValue<T> {
-    fn set_observer(&mut self, observer: Weak<dyn Observer>) {
+struct StateValueObserver<T> {
+    observers: Weak<RefCell<Vec<Weak<dyn Observer>>>>,
+    value: Rc<RefCell<T>>,
+}
+impl<T: Copy> Observed<T> for StateValueObserver<T> where T: 'static {
+    fn value(&mut self, observer: Weak<dyn Observer>) -> Box<dyn Value<T>> {
         if let Some(observers) = self.observers.upgrade() {
             observers.borrow_mut().push(observer);
         }
-    }
 
+        Box::new(StateValueValue::<T> {
+            value: self.value.clone(),
+        })
+    }
+}
+
+impl<T: Copy> Value<T> for StateValueValue<T> {
     fn get(&self) -> T {
         *self.value.borrow()
     }
@@ -69,19 +73,10 @@ impl<T: Copy> StateValue<T> where T: 'static {
             value: Rc::new(RefCell::new(initial)),
         };
 
-        let getter = StateValueValue {
+        let getter = StateValueObserver {
             observers: Rc::downgrade(&setter.observers),
             value: setter.value.clone(),
         };
-
-        impl<U: Copy> Observed<U> for StateValueValue<U> where U: 'static {
-            fn value(&mut self) -> Box<dyn Value<U>> {
-                Box::new(StateValueValue::<U> {
-                    observers: self.observers.clone(),
-                    value: self.value.clone(),
-                })
-            }
-        }
 
         (setter, Box::new(getter))
     }
@@ -137,22 +132,20 @@ impl ClockValue {
 }
 
 struct Printer<T> {
-    value: RefCell<Box<dyn Value<T>>>,
+    value: RefCell<Option<Box<dyn Value<T>>>>,
 }
 impl<T: std::fmt::Debug> Printer<T> where T: 'static {
     fn new(observed: &mut dyn Observed<T>) -> Rc<Printer<T>> {
-        let value = observed.value();
-        let r = Rc::new(Printer::<T> {
-            value: RefCell::new(value),
-        });
+        let r = Rc::new(Printer::<T> { value: RefCell::new(None)});
         let observer: Rc<dyn Observer> = r.clone();
-        r.value.borrow_mut().set_observer(Rc::downgrade(&observer));
+        let value = observed.value(Rc::downgrade(&observer));
+        *r.value.borrow_mut() = Some(value);
         r
     }
 }
 impl<T: std::fmt::Debug> Observer for Printer<T> {
     fn update(&self) {
-        println!("Got {:?}", self.value.borrow().get());
+        println!("Got {:?}", self.value.borrow().as_ref().unwrap().get());
     }
 }
 
@@ -160,8 +153,8 @@ struct PrettyClock {
     clock: Box<dyn Observed<SystemTime>>,
 }
 impl Observed<String> for PrettyClock {
-    fn value(&mut self) -> Box<dyn Value<String>> {
-        self.clock.value()
+    fn value(&mut self, observer: Weak<dyn Observer>) -> Box<dyn Value<String>> {
+        self.clock.value(observer)
         .map(|x| match x.duration_since(SystemTime::UNIX_EPOCH) {
             Ok(n) => format!("1970-01-01 00:00:00 UTC was {} seconds ago!", n.as_secs()),
             Err(_) => panic!("SystemTime before UNIX EPOCH!"),
