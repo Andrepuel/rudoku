@@ -10,15 +10,15 @@ impl Observer for EmptyObserver {
     fn update(&self) {}
 }
 trait ChildObserved<T, U> {
-    fn value(&mut self, observer: Weak<dyn Observer>, input: Box<dyn Value<U>>) -> Box<dyn Value<T>>;
+    fn value(&mut self, observer: &Rc<dyn Observer>, input: Box<dyn Value<U>>) -> Box<dyn Value<T>>;
 }
 struct ChildObservedFuse<T, U> {
     underlying: Box<dyn ChildObserved<T, U>>,
     input: Box<dyn Observed<U>>,
 }
 impl<T,U> Observed<T> for ChildObservedFuse<T, U> {
-    fn value(&mut self, observer: Weak<dyn Observer>) -> Box<dyn Value<T>> {
-        self.underlying.value(observer.clone(), self.input.value(observer.clone()))
+    fn value(&mut self, observer: &Rc<dyn Observer>) -> Box<dyn Value<T>> {
+        self.underlying.value(observer, self.input.value(observer))
     }
 }
 trait ChildObservedExt<T, U> {
@@ -33,7 +33,7 @@ impl<T, U> ChildObservedExt<T, U> for dyn ChildObserved<T, U> where T: 'static, 
     }
 }
 trait Observed<T> {
-    fn value(&mut self, observer: Weak<dyn Observer>) -> Box<dyn Value<T>>;
+    fn value(&mut self, observer: &Rc<dyn Observer>) -> Box<dyn Value<T>>;
 }
 
 trait Value<T> {
@@ -110,9 +110,9 @@ struct StateValueObserver<T> {
     value: Rc<RefCell<T>>,
 }
 impl<T: Copy> Observed<T> for StateValueObserver<T> where T: 'static {
-    fn value(&mut self, observer: Weak<dyn Observer>) -> Box<dyn Value<T>> {
+    fn value(&mut self, observer: &Rc<dyn Observer>) -> Box<dyn Value<T>> {
         if let Some(observers) = self.observers.upgrade() {
-            observers.borrow_mut().push(observer);
+            observers.borrow_mut().push(Rc::downgrade(observer));
         }
 
         Box::new(StateValueValue::<T> {
@@ -202,7 +202,7 @@ impl<T: std::fmt::Display> Printer<T> where T: 'static {
     fn new(mut observed: Box<dyn Observed<T>>) -> Rc<Printer<T>> {
         let r = Rc::new(Printer::<T> { value: RefCell::new(None)});
         let observer: Rc<dyn Observer> = r.clone();
-        let value = observed.value(Rc::downgrade(&observer));
+        let value = observed.value(&observer);
         *r.value.borrow_mut() = Some(value);
         r
     }
@@ -221,7 +221,7 @@ impl PrettyClock {
     }
 }
 impl ChildObserved<String, SystemTime> for PrettyClock {
-    fn value(&mut self, _: Weak<dyn Observer>, input: Box<dyn Value<SystemTime>>) -> Box<dyn Value<String>> {
+    fn value(&mut self, _: &Rc<dyn Observer>, input: Box<dyn Value<SystemTime>>) -> Box<dyn Value<String>> {
         input
         .map(|x| match x.duration_since(SystemTime::UNIX_EPOCH) {
             Ok(n) => format!("1970-01-01 00:00:00 UTC was {} seconds ago!", n.as_secs()),
@@ -242,7 +242,7 @@ impl PositionedText {
     }
 }
 impl ChildObserved<String, (i32, i32, String)> for PositionedText {
-    fn value(&mut self, _: Weak<dyn Observer>, input: Box<dyn Value<(i32, i32, String)>>) -> Box<dyn Value<String>> {
+    fn value(&mut self, _: &Rc<dyn Observer>, input: Box<dyn Value<(i32, i32, String)>>) -> Box<dyn Value<String>> {
         ValueExt::map(input,
         |x| format!("{}{}", PositionedText::position(x.0, x.1), x.2))
     }
@@ -263,7 +263,7 @@ impl HorizontalLine {
     }
 }
 impl ChildObserved<String, (i32, i32, i32)> for HorizontalLine {
-    fn value(&mut self, observer: Weak<dyn Observer>, input: Box<dyn Value<(i32, i32, i32)>>) -> Box<dyn Value<String>> {
+    fn value(&mut self, observer: &Rc<dyn Observer>, input: Box<dyn Value<(i32, i32, i32)>>) -> Box<dyn Value<String>> {
         self.positioned.value(observer,
             input
             .map(|x| (x.0, x.1, HorizontalLine::line(x.2)))
@@ -279,7 +279,7 @@ impl VerticalLine {
     }
 }
 impl ChildObserved<String, (i32, i32, i32)> for VerticalLine {
-    fn value(&mut self, _: Weak<dyn Observer>, input: Box<dyn Value<(i32, i32, i32)>>) -> Box<dyn Value<String>> {
+    fn value(&mut self, _: &Rc<dyn Observer>, input: Box<dyn Value<(i32, i32, i32)>>) -> Box<dyn Value<String>> {
         input
         .map(|(row,col,len)| {
             let mut r = String::new();
@@ -303,7 +303,7 @@ impl Clear {
     }
 }
 impl ChildObserved<String, (i32, i32, i32, i32)> for Clear {
-    fn value(&mut self, _: Weak<dyn Observer>, input: Box<dyn Value<(i32, i32, i32, i32)>>) -> Box<dyn Value<String>> {
+    fn value(&mut self, _: &Rc<dyn Observer>, input: Box<dyn Value<(i32, i32, i32, i32)>>) -> Box<dyn Value<String>> {
         input
         .map(|(row, col, width, height)| {
             let mut r = String::new();
@@ -332,21 +332,21 @@ impl Border {
     }
 }
 impl ChildObserved<String, (i32, i32, i32, i32)> for Border {
-    fn value(&mut self, observer: Weak<dyn Observer>, input_unique: Box<dyn Value<(i32, i32, i32, i32)>>) -> Box<dyn Value<String>> {
+    fn value(&mut self, observer: &Rc<dyn Observer>, input_unique: Box<dyn Value<(i32, i32, i32, i32)>>) -> Box<dyn Value<String>> {
         let input = input_unique.split();
 
-        self.top.value(observer.clone(),
+        self.top.value(observer,
             input.take()
             .map(|(row, col, width, _height)| (row, col, width))
-        ).join(self.bottom.value(observer.clone(),
+        ).join(self.bottom.value(observer,
             input.take()
             .map(|(row, col, width, height)| (row + height - 1, col, width))
         )).map(|x| format!("{}{}", x.0, x.1))
-        .join(self.left.value(observer.clone(),
+        .join(self.left.value(observer,
             input.take()
             .map(|(row, col, _width, height)| (row, col, height))
         )).map(|x| format!("{}{}", x.0, x.1))
-        .join(self.right.value(observer.clone(),
+        .join(self.right.value(observer,
             input.take()
             .map(|(row, col, width, height)| (row, col + width - 1, height))
         )).map(|x| format!("{}{}", x.0, x.1))
@@ -368,17 +368,17 @@ impl Decorated {
     }
 }
 impl ChildObserved<String, (i32, i32, String)> for Decorated {
-    fn value(&mut self, observer: Weak<dyn Observer>, input_unique: Box<dyn Value<(i32, i32, String)>>) -> Box<dyn Value<String>> {
+    fn value(&mut self, observer: &Rc<dyn Observer>, input_unique: Box<dyn Value<(i32, i32, String)>>) -> Box<dyn Value<String>> {
         let input = input_unique.split();
 
-        self.clear.value(observer.clone(),
+        self.clear.value(observer,
             input.take()
             .map(|(row, col, text)| (row, col, (text.len() + 3) as i32, 5))
-        ).join(self.border.value(observer.clone(),
+        ).join(self.border.value(observer,
             input.take()
             .map(|(row, col, text)| (row, col, (text.len() + 3) as i32, 5))
         )).map(|x| format!("{}{}", x.0, x.1))
-        .join(self.positioned.value(observer.clone(),
+        .join(self.positioned.value(observer,
             input.take()
             .map(|(row, col, text)| (row + 2, col + 2, text))
         )).map(|x| format!("{}{}", x.0, x.1))
@@ -398,9 +398,9 @@ impl Main {
     }
 }
 impl ChildObserved<String, SystemTime> for Main {
-    fn value(&mut self, observer: Weak<dyn Observer>, input: Box<dyn Value<SystemTime>>) -> Box<dyn Value<String>> {
-        self.decorated.value(observer.clone(),
-            self.text.value(observer.clone(), input)
+    fn value(&mut self, observer: &Rc<dyn Observer>, input: Box<dyn Value<SystemTime>>) -> Box<dyn Value<String>> {
+        self.decorated.value(observer,
+            self.text.value(observer, input)
             .map(|x| (3, 3, x))
         )
     }
