@@ -39,12 +39,28 @@ struct StateValue<T> {
     observers: Rc<RefCell<Vec<Weak<dyn Observer>>>>,
     value: Rc<RefCell<T>>,
 }
-impl<T: Copy> StateValue<T> {
-    fn new(initial: T) -> StateValue<T> {
-        StateValue {
+impl<T: Copy> StateValue<T> where T: 'static {
+    fn new(initial: T) -> (StateValue<T>, Box<dyn Observed<T>>) {
+        let setter = StateValue {
             observers: Rc::new(RefCell::new(Vec::new())),
             value: Rc::new(RefCell::new(initial)),
+        };
+
+        let getter = StateValueValue {
+            observers: Rc::downgrade(&setter.observers),
+            value: setter.value.clone(),
+        };
+
+        impl<U: Copy> Observed<U> for StateValueValue<U> where U: 'static {
+            fn value(&mut self) -> Box<dyn Value<U>> {
+                Box::new(StateValueValue::<U> {
+                    observers: self.observers.clone(),
+                    value: self.value.clone(),
+                })
+            }
         }
+
+        (setter, Box::new(getter))
     }
 
     fn lock_observers(&mut self) -> Vec<Rc<dyn Observer>> {
@@ -70,14 +86,6 @@ impl<T: Copy> StateValue<T> {
         .for_each(|x| x.update());
     }
 }
-impl<T: Copy> Observed<T> for StateValue<T> where T: 'static {
-    fn value(&mut self) -> Box<dyn Value<T>> {
-        Box::new(StateValueValue {
-            observers: Rc::downgrade(&self.observers),
-            value: self.value.clone(),
-        })
-    }
-}
 
 use std::time::{Duration, SystemTime};
 use std::thread::sleep;
@@ -86,10 +94,15 @@ struct ClockValue {
     value: StateValue<SystemTime>,
 }
 impl ClockValue {
-    fn new() -> ClockValue {
-        ClockValue {
-            value: StateValue::new(SystemTime::now()),
-        }
+    fn new() -> (ClockValue, Box<dyn Observed<SystemTime>>) {
+        let (value, observed) = StateValue::new(SystemTime::now());
+
+        (
+            ClockValue {
+                value,
+            },
+            observed
+        )
     }
 
     fn run(&mut self) {
@@ -97,11 +110,6 @@ impl ClockValue {
             sleep(Duration::new(1, 0));
             self.value.set(SystemTime::now());
         }
-    }
-}
-impl Observed<SystemTime> for ClockValue {
-    fn value(&mut self) -> Box<dyn Value<SystemTime>> {
-        self.value.value()
     }
 }
 
@@ -125,8 +133,35 @@ impl<T: std::fmt::Debug> Observer for Printer<T> {
     }
 }
 
+struct PrettyClock {
+    clock: Box<dyn Observed<SystemTime>>,
+}
+impl Observed<String> for PrettyClock {
+    fn value(&mut self) -> Box<dyn Value<String>> {
+        struct SelfValue {
+            under: Box<dyn Value<SystemTime>>,
+        }
+        impl Value<String> for SelfValue {
+            fn set_observer(&mut self, observer: Weak<dyn Observer>) {
+                self.under.set_observer(observer)
+            }
+
+            fn get(&self) -> String {
+                match self.under.get().duration_since(SystemTime::UNIX_EPOCH) {
+                    Ok(n) => format!("1970-01-01 00:00:00 UTC was {} seconds ago!", n.as_secs()),
+                    Err(_) => panic!("SystemTime before UNIX EPOCH!"),
+                }
+            }
+        }
+        Box::new(SelfValue{under: self.clock.value()})
+    }
+}
+
 fn main() {
-    let mut clock = ClockValue::new();
-    let x = Printer::new(&mut clock);
-    clock.run();
+    let (mut runner, clock) = ClockValue::new();
+    let mut pretty = PrettyClock {
+        clock,
+    };
+    let x = Printer::new(&mut pretty);
+    runner.run();
 }
