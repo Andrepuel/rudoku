@@ -1,7 +1,6 @@
-use crate::rudoku::{StateValue, Observed, Observer, ChildObserved, Value, ValueExt};
-use notify::{RecommendedWatcher, Watcher, RecursiveMode, RawEvent, raw_watcher};
-use std::sync::mpsc::{Receiver, channel};
-use std::rc::Rc;
+use crate::rudoku::{Observed, ObservedExt, StateValue};
+use notify::{raw_watcher, RawEvent, RecommendedWatcher, RecursiveMode, Watcher};
+use std::sync::mpsc::{channel, Receiver};
 
 pub struct WatchFile {
     _watcher: RecommendedWatcher,
@@ -19,9 +18,9 @@ impl WatchFile {
             WatchFile {
                 _watcher: watcher,
                 receiver,
-                value
+                value,
             },
-            observed
+            observed,
         )
     }
 
@@ -33,23 +32,6 @@ impl WatchFile {
     }
 }
 
-pub struct Read {
-    path: String,
-}
-impl Read {
-    pub fn new(path: String) -> Read {
-        Read {
-            path
-        }
-    }
-}
-impl ChildObserved<String, ()> for Read {
-    fn value(&mut self, _: &Rc<dyn Observer>, input: Box<dyn Value<()>>)
-    -> Box<dyn Value<String>>
-    {
-        let path = self.path.clone();
-
-        input
-        .map(move |_| std::fs::read_to_string(&path).unwrap())
-    }
+pub fn read(path: String, watcher: Box<dyn Observed<()>>) -> Box<dyn Observed<String>> {
+    watcher.map(move |_| std::fs::read_to_string(&path).unwrap())
 }
