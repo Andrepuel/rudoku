@@ -5,9 +5,9 @@ fn position(row: i32, column: i32) -> String {
 }
 
 pub fn positioned_text(
-    pos: Box<dyn Observed<(i32, i32)>>,
-    text: Box<dyn Observed<String>>,
-) -> Box<dyn Observed<String>> {
+    pos: impl Observed<T=(i32, i32)>,
+    text: impl Observed<T=String>,
+) -> impl Observed<T=String> {
     pos.join(text)
         .map(|((row, col), text)| format!("{}{}", position(row, col), text))
 }
@@ -19,16 +19,16 @@ fn line(length: i32) -> String {
 }
 
 pub fn horizontal_line(
-    pos: Box<dyn Observed<(i32, i32)>>,
-    width: Box<dyn Observed<i32>>,
-) -> Box<dyn Observed<String>> {
+    pos: impl Observed<T=(i32, i32)>,
+    width: impl Observed<T=i32>,
+) -> impl Observed<T=String> {
     positioned_text(pos, width.map(|x| line(x)))
 }
 
 pub fn vertical_line(
-    pos: Box<dyn Observed<(i32, i32)>>,
-    height: Box<dyn Observed<i32>>,
-) -> Box<dyn Observed<String>> {
+    pos: impl Observed<T=(i32, i32)>,
+    height: impl Observed<T=i32>,
+) -> impl Observed<T=String> {
     pos.join(height).map(|((row, col), height)| {
         // FIXME Use observed combination for that
         let mut r = String::new();
@@ -46,9 +46,9 @@ fn blank(length: i32) -> String {
 }
 
 pub fn clear(
-    pos: Box<dyn Observed<(i32, i32)>>,
-    dim: Box<dyn Observed<(i32, i32)>>,
-) -> Box<dyn Observed<String>> {
+    pos: impl Observed<T=(i32, i32)>,
+    dim: impl Observed<T=(i32, i32)>,
+) -> impl Observed<T=String> {
     pos.join(dim).map(|((row, col), (width, height))| {
         let mut r = String::new();
         for i in 0..height {
@@ -59,54 +59,47 @@ pub fn clear(
 }
 
 pub fn border(
-    pos_arg: Box<dyn Observed<(i32, i32)>>,
-    dim_arg: Box<dyn Observed<(i32, i32)>>,
-) -> Box<dyn Observed<String>> {
-    let pos = pos_arg.split();
-    let dim = dim_arg.split();
-
-    horizontal_line(pos.take(), dim.take().map(|(width, _)| width))
+    pos: impl Observed<T=(i32, i32)> + Clone,
+    dim: impl Observed<T=(i32, i32)> + Clone,
+) -> impl Observed<T=String> {
+    horizontal_line(pos.clone(), dim.clone().map(|(width, _)| width))
         .join(horizontal_line(
-            pos.take()
-                .join(dim.take())
+            pos.clone()
+                .join(dim.clone())
                 .map(|((row, col), (_, height))| (row + height - 1, col)),
-            dim.take().map(|(width, _)| width),
+            dim.clone().map(|(width, _)| width),
         ))
         .map(|(a, b)| format!("{}{}", a, b))
         .join(vertical_line(
-            pos.take(),
-            dim.take().map(|(_, height)| height),
+            pos.clone(),
+            dim.clone().map(|(_, height)| height),
         ))
         .map(|(a, b)| format!("{}{}", a, b))
         .join(vertical_line(
-            pos.take()
-                .join(dim.take())
+            pos.clone()
+                .join(dim.clone())
                 .map(|((row, col), (width, _))| (row, col + width - 1)),
-            dim.take().map(|(_, height)| height),
+            dim.clone().map(|(_, height)| height),
         ))
         .map(|(a, b)| format!("{}{}", a, b))
 }
 
 pub fn decorated(
-    pos_arg: Box<dyn Observed<(i32, i32)>>,
-    text_arg: Box<dyn Observed<Vec<String>>>,
-) -> Box<dyn Observed<String>> {
-    let pos = pos_arg.split();
-    let text = text_arg.split();
-    let dim = text
-        .take()
+    pos: impl Observed<T=(i32, i32)> + Clone,
+    text: impl Observed<T=Vec<String>> + Clone,
+) -> impl Observed<T=String> {
+    let dim = text.clone()
         .map(|text| {
             (
                 text.iter().map(|x| x.len()).max().unwrap() as i32 + 4,
                 text.len() as i32 + 4,
             )
-        })
-        .split();
+        });
 
-    clear(pos.take(), dim.take())
-        .join(border(pos.take(), dim.take()))
+    clear(pos.clone(), dim.clone())
+        .join(border(pos.clone(), dim.clone()))
         .map(|x| format!("{}{}", x.0, x.1))
-        .join(pos.take().join(text.take()).map(|((row, col), text)| {
+        .join(pos.clone().join(text).map(|((row, col), text)| {
             let mut r = String::new();
             for i in 0..(text.len() as i32) {
                 r.push_str(&format!(

@@ -8,8 +8,8 @@ pub struct WatchFile {
     value: StateValue<()>,
 }
 impl WatchFile {
-    pub fn new(path: &str) -> (WatchFile, Box<dyn Observed<()>>) {
-        let (value, observed) = StateValue::new(());
+    pub fn new(path: &str) -> (WatchFile, StateValue<()>) {
+        let value = StateValue::new(());
         let (tx, receiver) = channel();
         let mut watcher = raw_watcher(tx).unwrap();
         watcher.watch(path, RecursiveMode::NonRecursive).unwrap();
@@ -18,9 +18,9 @@ impl WatchFile {
             WatchFile {
                 _watcher: watcher,
                 receiver,
-                value,
+                value: value.clone(),
             },
-            observed,
+            value
         )
     }
 
@@ -32,6 +32,6 @@ impl WatchFile {
     }
 }
 
-pub fn read(path: String, watcher: Box<dyn Observed<()>>) -> Box<dyn Observed<String>> {
+pub fn read(path: String, watcher: impl Observed<T=()> + Clone) -> impl Observed<T=String> + Clone {
     watcher.map(move |_| std::fs::read_to_string(&path).unwrap())
 }

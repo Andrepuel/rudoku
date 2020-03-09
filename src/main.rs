@@ -4,15 +4,17 @@ use rudoku::text::decorated;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-struct Printer<T> {
-    value: RefCell<Option<Rc<dyn Value<T>>>>,
+struct Printer<T, V: Value<T=T>> {
+    value: RefCell<Option<V>>,
 }
-impl<T: std::fmt::Display> Printer<T>
+impl<T: std::fmt::Display, V: Value<T=T>> Printer<T, V>
 where
     T: 'static,
 {
-    fn new(observed: Box<dyn Observed<T>>) -> Rc<Printer<T>> {
-        let r = Rc::new(Printer::<T> {
+    fn new(observed: impl Observed<T=T, V=V>) -> Rc<Printer<T, V>>
+    where V: 'static
+    {
+        let r = Rc::new(Printer::<T, V> {
             value: RefCell::new(None),
         });
         let observer: Rc<dyn Observer> = r.clone();
@@ -23,7 +25,7 @@ where
         r
     }
 }
-impl<T: std::fmt::Display> Observer for Printer<T> {
+impl<T: std::fmt::Display, V: Value<T=T>> Observer for Printer<T, V> {
     fn update(&self) {
         println!("{}", self.value.borrow().as_ref().unwrap().get());
     }
